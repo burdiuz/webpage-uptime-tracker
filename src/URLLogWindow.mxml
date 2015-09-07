@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:Window xmlns:fx="http://ns.adobe.com/mxml/2009" 
+		  xmlns:s="library://ns.adobe.com/flex/spark" 
+		  xmlns:mx="library://ns.adobe.com/flex/mx" title="Log for {info.label}" width="400" height="300" backgroundColor="#333333" minimizable="false" showStatusBar="false" 
+		  close="closeHandler(event)" creationComplete="creationCompleteHandler(event)">
+	<fx:Script>
+		<![CDATA[
+			import mx.collections.XMLListCollection;
+			import mx.controls.Alert;
+			import mx.events.FlexEvent;
+			static private const _instances:Dictionary = new Dictionary();
+			private var _connection:SQLConnection;
+			[Bindable]
+			public var info:URLInfo;
+			static public function display(connection:SQLConnection, info:URLInfo):URLLogWindow{
+				var window:URLLogWindow;
+				if(info in _instances){
+					window = _instances[info] as URLLogWindow;
+					window.orderToFront();
+					window.nativeWindow.notifyUser(NotificationType.INFORMATIONAL);
+				}else{
+					window = new URLLogWindow();
+					window._connection =  connection;
+					window.info = info;
+					_instances[info] = window;
+					window.open();
+				}
+				return window;
+			}
+			
+			protected function closeHandler(event:Event):void{
+				delete _instances[this.info];
+			}
+			protected function creationCompleteHandler(event:FlexEvent):void{
+				this.updateButton_clickHandler(null);
+			}
+			protected function clickHandler(event:MouseEvent):void{
+				if(ActivityTracker.urls.isActive(this.info)){
+					const list:Array = ActivityTracker.states.getBy("urlId", this.info.id);
+					const sessions:Array = [];
+					for each(var state:WebPageState in list){
+						if(sessions.indexOf(state.sessionId)<0) sessions.push(state.sessionId);
+					}
+					DBStructure.clear(this._connection, this.info.id, sessions);
+				}else DBStructure.clear(this._connection, this.info.id);
+				this.close();
+			}
+			private function expandAll():void{
+				var list:XMLListCollection = this.treeDisplay.dataProvider as XMLListCollection;
+				for each(var node:XML in list){
+					this.treeDisplay.expandItem(node, true);
+				}
+			}
+			private function collapseAll():void{
+				var list:XMLListCollection = this.treeDisplay.dataProvider as XMLListCollection;
+				for each(var node:XML in list){
+					this.treeDisplay.expandItem(node, false);
+				}
+			}
+			private var _logXML:XML;
+			protected function updateButton_clickHandler(event:MouseEvent):void{
+				const xml:XML = this._logXML = DBStructure.generateURLLogXML(this._connection, this.info.id);
+				this.treeDisplay.dataProvider = new XMLListCollection(xml.session);
+				this.clearButton.enabled = Boolean(xml.children().length());
+			}
+			private var _file:File;
+			protected function exportButton_clickHandler(event:MouseEvent):void{
+				_file = File.documentsDirectory.resolvePath(info.label.replace(/[:\\\/]+/ig, "_")+".xml");
+				_file.addEventListener(Event.SELECT, this.fileSelectHandler);
+				_file.browseForSave("Select destination for Log file");
+			}
+			private function fileSelectHandler(event:Event):void{
+				try{
+					FileUtils.writeString("<?xml version=\"1.0\" ?>\n"+this._logXML.toXMLString(), this._file);
+				}catch(error:Error){
+					Alert.show("Cannot save Log file becauase of I/O error, check you permissions.", "Error", 4, this);
+					return;
+				}
+				Alert.show("Log file saved successfuly.", "", 4, this);
+			}
+			
+		]]>
+	</fx:Script>
+	<fx:Declarations>
+		<!-- Place non-visual elements (e.g., services, value objects) here -->
+	</fx:Declarations>
+	<s:layout>
+		<s:VerticalLayout paddingLeft="5" paddingTop="5" paddingRight="5" paddingBottom="5" horizontalAlign="right"/>
+	</s:layout>
+	<s:HGroup width="100%" horizontalAlign="right">
+		<s:Button label="Refresh" click="updateButton_clickHandler(event)"/>
+		<s:Spacer width="100%"/>
+		<s:Button label="Expand All" click="expandAll()"/>
+		<s:Button label="Collapse All" click="collapseAll()"/>
+	</s:HGroup>
+	<mx:Tree id="treeDisplay" width="100%" height="100%" labelField="@label" selectable="false"/>
+	<s:HGroup width="100%">
+		<s:Button label="Export log" click="exportButton_clickHandler(event)" toolTip="Export Log into XML file"/>
+		<s:Spacer width="100%"/>
+		<s:Button id="clearButton" label="Clear Log and Close" click="clickHandler(event)" toolTip="Remove all Stored Sessions except currently running"/>
+	</s:HGroup>
+</s:Window>

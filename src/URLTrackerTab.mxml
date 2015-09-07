@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:NavigatorContent xmlns:fx="http://ns.adobe.com/mxml/2009" 
+					xmlns:s="library://ns.adobe.com/flex/spark" 
+					xmlns:mx="library://ns.adobe.com/flex/mx" label="&lt;uninitialized&gt;" width="100%" height="100%" xmlns:List="com.kingnare.skin.spark.List.*" removedFromStage="removedFromStageHandler(event)">
+	<fx:Script>
+		<![CDATA[
+			import mx.collections.ArrayList;
+			import mx.core.IVisualElementContainer;
+			import mx.netmon.NetworkMonitor;
+			
+			import air.net.URLMonitor;
+			static private const acceptableStatusCodes:Object = {
+				"200":true, // OK
+				"202":true, // Accepted
+				"204":true, // No content
+				"205":true, // (Reset content
+				"206":true  // Partial content, in response to request with a Range header
+			};
+			private var _connection:SQLConnection;
+			private var _timeout:int;
+			private var _request:URLRequest;
+			private var _info:URLInfo;
+			private var _sessionId:uint;
+			
+			private var _minTime:uint;
+			private var _iterationCount:uint;
+			private var _fullTime:uint;
+			private var _maxTime:uint;
+			private var _lastStatus:WebPageState;
+			private var _startDate:Date;
+			private var _timer:Timer;
+			private var _loader:URLLoader;
+			private var _progress:Boolean;
+			[Bindable]
+			public var description:String;
+			[Bindable]
+			public var list:ArrayList = new ArrayList([]);
+
+			public function get lastStatus():WebPageState{
+				return _lastStatus;
+			}
+			public function get info():URLInfo{
+				return this._info;
+			}
+			public function start(connection:SQLConnection, url:URLInfo, timeout:Number=1):void{
+				this._connection = connection;
+				this._timeout = timeout*60000;
+				this._info = url;
+				ActivityTracker.urls.addActivity(url);
+				if(url.hasLabel()) this.label = url.label;
+				else{
+					const parser:WebURL = WebURL.parse(url.value);
+					this.label = parser.compose(WebURL.DOMAIN, WebURL.PATH);
+				}
+				this.startInternal();
+			}
+			private function startInternal():void{
+				this.clear();
+				this._sessionId = DBStructure.createSession(this._connection, this._info.id, this._startDate);
+				this._request = new URLRequest(this._info.value);
+				this._request.method = URLRequestMethod.HEAD;
+				this.startTimer();
+				this.startLoader();
+			}
+			private function loaderHTTPResponseStatusHandler(event:HTTPStatusEvent):void{
+				if(event.status in acceptableStatusCodes) this.updateStatus(WebPageState.WEBPAGE_REACHABLE);
+				else this.updateStatus(WebPageState.WEBPAGE_UNREACHABLE);
+				this.stopLoader();
+			}
+			private function loaderIOErrorHandler(event:IOErrorEvent):void{
+				this.stopLoader();
+				this.updateStatus(WebPageState.NETWORK_OFFLINE);
+			}
+			private function startLoader():void{
+				this._startDate = new Date();
+				const loader:URLLoader = this._loader = new URLLoader();
+				loader.addEventListener(HTTPStatusEvent.HTTP_RESPONSE_STATUS, this.loaderHTTPResponseStatusHandler);
+				loader.addEventListener(IOErrorEvent.IO_ERROR, this.loaderIOErrorHandler);
+				this._progress = true;
+				loader.load(this._request);
+			}
+			private function stopLoader():void{
+				const loader:URLLoader = this._loader;
+				if(loader){
+					loader.removeEventListener(HTTPStatusEvent.HTTP_RESPONSE_STATUS, this.loaderHTTPResponseStatusHandler);
+					loader.removeEventListener(IOErrorEvent.IO_ERROR, this.loaderIOErrorHandler);
+					if(this._progress){
+						loader.close();
+						this._progress = false;
+					}
+				}
+				this._loader = null;
+			}
+			private function startTimer():void{
+				const timer:Timer = this._timer = new Timer(this._timeout);
+				this._timer.addEventListener(TimerEvent.TIMER, this.timerTimerHandler);
+				this._timer.start();
+			}
+			private function stopTimer():void{
+				const timer:Timer = this._timer;
+				if(timer){
+					timer.removeEventListener(TimerEvent.TIMER, this.timerTimerHandler);
+					timer.stop();
+				}
+				this._timer = null;
+			}
+			private function timerTimerHandler(event:TimerEvent):void{
+				if(this._progress){
+					this.stopLoader();
+					this.updateStatus(WebPageState.UNKNOWN);
+				}
+				this.startLoader();
+			}
+			private function updateStatus(status:int):void{
+				var date:Date = new Date();
+				var time:uint = date.time-this._startDate.time;
+				this._minTime = this._minTime ? Math.min(this._minTime, time) : time;
+				this._maxTime = this._maxTime ? Math.max(this._maxTime, time) : time;
+				this._iterationCount++;
+				this._fullTime += time;
+				const avgTime:uint = this._fullTime/this._iterationCount;
+				if(!this._lastStatus || this._lastStatus.value!=status){
+					ActivityTracker.states.removeActivity(this._lastStatus);
+					this._lastStatus = WebPageState.create(this._connection, this._info.id, this._sessionId, status, this._startDate, this._minTime, avgTime, this._maxTime, date);
+					ActivityTracker.states.addActivity(this._lastStatus);
+					this.list.addItemAt(this._lastStatus, 0);
+					WebPageUpTimeTracker.instance.webPageStateChanged(this);
+				}else{
+					DBStructure.updateState(this._connection, this._lastStatus.id, this._minTime, avgTime, this._maxTime, date);
+					this._lastStatus.minTime = this._minTime;
+					this._lastStatus.averageTime = avgTime;
+					this._lastStatus.maxTime = this._maxTime;
+					this._lastStatus.endDate = date;
+				}
+			}
+			public function clear():void{
+				this._startDate =  new Date();
+				var minutes:Number = int(this._timeout/6000)/10;
+				this.description = "Log from "+DateUtil.format(this._startDate, true)+"; every "+(minutes>int(minutes) ? int(minutes)+"."+String(int(minutes*10)-int(minutes)*10) : minutes)+(minutes<2 ? " minute" : " minutes");
+				this.list.removeAll();
+				if(this._lastStatus){
+					this.list.addItemAt(this._lastStatus, 0);
+				}
+			}
+			protected function stopButton_clickHandler(event:MouseEvent):void{
+				this.stopTimer();
+				this.stopLoader();
+				(this.owner as IVisualElementContainer).removeElement(this);
+			}
+			protected function clearButton_clickHandler(event:MouseEvent):void{
+				this.clear();
+			}
+			protected function removedFromStageHandler(event:Event):void{
+				ActivityTracker.states.removeActivity(this._lastStatus);
+				ActivityTracker.urls.removeActivity(this._info);
+			}
+			
+		]]>
+	</fx:Script>
+	<fx:Declarations>
+		<!-- Place non-visual elements (e.g., services, value objects) here -->
+	</fx:Declarations>
+	<s:HGroup left="4" top="4" right="4" verticalAlign="middle">
+		<s:Label text="{description}" width="100%"/>
+		<s:Button label="Clear" click="clearButton_clickHandler(event)" enabled="{list.length&gt;1}"/>
+		<s:Button label="Stop" click="stopButton_clickHandler(event)"/>
+	</s:HGroup>
+	<s:Scroller left="4" top="30" right="0" bottom="0" horizontalScrollPolicy="off">
+		<s:DataGroup dataProvider="{list}" width="100%" height="100%" itemRenderer="StateItemRenderer">
+			<s:layout>
+				<s:VerticalLayout paddingRight="4" paddingBottom="4"/>
+			</s:layout>
+		</s:DataGroup>
+	</s:Scroller>
+</s:NavigatorContent>

@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:WindowedApplication xmlns:fx="http://ns.adobe.com/mxml/2009" 
+					   xmlns:s="library://ns.adobe.com/flex/spark" 
+					   xmlns:mx="library://ns.adobe.com/flex/mx" 
+					   title="Web page Up Time tracker" showStatusBar="false" minWidth="400" minHeight="400"  
+					   preinitialize="preinitializeHandler(event)" 
+					   initialize="initializeHandler(event)" 
+					   close="closeHandler(event)">
+	<fx:Style source="style.css"/>
+	<fx:Script>
+		<![CDATA[
+			import mx.collections.ArrayList;
+			import mx.events.FlexEvent;
+			
+			import spark.events.TextOperationEvent;
+			
+			import events.URLSelectEvent;
+			
+			[Embed(source="icons/logo_128.png")]
+			static public const DOCK_ICON:Class;
+			[Embed(source="icons/logo_16.png")]
+			static public const SYSTRAY_ICON:Class;
+			static public var instance:WebPageUpTimeTracker;
+			private const _urlVerification:Object = {};
+			private var _urls:ArrayList;
+			private var _connection:SQLConnection;
+			
+			[Bindable]
+			public var settings:Settings = Settings.instance;
+			[Bindable]
+			public function get urls():ArrayList{
+				return _urls;
+			}
+			public function set urls(value:ArrayList):void{
+				this._urls = value;
+			}
+
+			protected function preinitializeHandler(event:FlexEvent):void{
+				instance = this;
+				// DB
+				const file:File = File.applicationStorageDirectory.resolvePath("urls.log");
+				var connection:SQLConnection = this._connection = new SQLConnection();
+				const create:Boolean = !file.exists;
+				connection.open(file);
+				if(create) DBStructure.install(connection);
+				// Tray
+				if(NativeApplication.supportsDockIcon){
+					var dockIcon:DockIcon = NativeApplication.nativeApplication.icon as DockIcon;
+					dockIcon.bitmaps = [new DOCK_ICON()];
+					NativeApplication.nativeApplication.addEventListener(InvokeEvent.INVOKE, this.switchWindowHandler);
+				}else if(NativeApplication.supportsSystemTrayIcon){
+					var sysTrayIcon:SystemTrayIcon = NativeApplication.nativeApplication.icon as SystemTrayIcon;
+					sysTrayIcon.tooltip = this.title;
+					sysTrayIcon.bitmaps = [new SYSTRAY_ICON()];
+					sysTrayIcon.addEventListener(MouseEvent.CLICK, this.switchWindowHandler);
+				}
+				// Minimize
+				this.nativeWindow.addEventListener(NativeWindowDisplayStateEvent.DISPLAY_STATE_CHANGE, this.nativeWindowDisplayStateChangeHandler);
+			}
+			public function webPageStateChanged(tab:URLTrackerTab):void{
+				if(NativeApplication.supportsDockIcon){
+					var dockIcon:DockIcon = NativeApplication.nativeApplication.icon as DockIcon;
+					dockIcon.bounce();
+				}else if(NativeApplication.supportsSystemTrayIcon){
+					var sysTrayIcon:SystemTrayIcon = NativeApplication.nativeApplication.icon as SystemTrayIcon;
+					sysTrayIcon.tooltip = tab.label+" changed state to \""+String(tab.lastStatus)+"\"";
+					if(!this.nativeWindow.visible && this.settings.restoreWindowOnStateChange){
+						this.switchWindowHandler(null);
+					}
+				}
+				this.logsNavigator.selectedChild = tab;
+			}
+			private function nativeWindowDisplayStateChangeHandler(event:NativeWindowDisplayStateEvent):void{
+				if(event.afterDisplayState == NativeWindowDisplayState.MINIMIZED){
+					this.nativeWindow.visible = false;
+				}
+			}
+			private function switchWindowHandler(event:Event):void{
+				if(this.nativeWindow.visible){
+					this.nativeWindow.visible = false;
+				}else{
+					this.nativeWindow.visible = true;
+					if(this.nativeWindow.displayState == NativeWindowDisplayState.MINIMIZED){
+						this.nativeWindow.restore();
+					}
+				}
+			}
+			protected function initializeHandler(event:FlexEvent):void{
+				// Data
+				const list:Array = [];
+				const sql:SQLStatement = new SQLStatement();
+				sql.sqlConnection = this._connection;
+				sql.text = "SELECT `id`, `value` FROM `urls` ORDER BY `value` ASC;";
+				sql.execute();
+				const data:Array = sql.getResult().data;
+				for each(var item:Object in data){
+					var info:URLInfo = URLInfo.create(item);
+					list.push(info);
+					this.addURLToVerification(info);
+				}
+				this.urls = new ArrayList(list);
+				// Visual
+				this.urlInput.textInput.addEventListener(TextOperationEvent.CHANGE, this.urlTextInputChangeHandler);
+			}
+			private function addURLToVerification(info:URLInfo):void{
+				var url:String = WebURL.compose(info.value, WebURL.DOMAIN, WebURL.PATH).toLowerCase();
+				if(url in this._urlVerification) this._urlVerification[url].push(info);
+				else this._urlVerification[url] = [info];
+			}
+			protected function startButton_clickHandler(event:MouseEvent):void{
+				if(!this.urlInput.selectedItem) return;
+				if(this.urlInput.selectedItem is String){
+					const string:String = String(this.urlInput.selectedItem);
+					const short:String = WebURL.compose(string, WebURL.DOMAIN, WebURL.PATH).toLowerCase();
+					if(short in this._urlVerification){
+						for each(var item:URLInfo in this._urlVerification[short]){
+							if(item.value==string){
+								this.addTab(item);
+								return;
+							}
+						}
+						const popup:URLSelectPopUp = URLSelectPopUp.display(new ArrayList(this._urlVerification[short]));
+						popup.addEventListener(URLSelectEvent.SELECT, this.urlSelectPopUpHandler);
+						popup.addEventListener(Event.CANCEL, this.urlCancelPopUpHandler);
+					}else this.addNewURLTab(string);
+				}else{
+					this.addTab(this.urlInput.selectedItem);
+				}
+			}
+			private function urlSelectPopUpHandler(event:URLSelectEvent):void{
+				this.removeURLSelectPopUpListeners(event.target as IEventDispatcher);
+				this.addTab(event.item);
+			}
+			private function urlCancelPopUpHandler(event:Event):void{
+				this.removeURLSelectPopUpListeners(event.target as IEventDispatcher);
+				this.addNewURLTab(this.urlInput.selectedItem);
+				this.urlInput.textInput.text = "";
+				this.urlInput.selectedIndex = -1;
+			}
+			private function removeURLSelectPopUpListeners(popup:IEventDispatcher):void{
+				popup.addEventListener(URLSelectEvent.SELECT, this.urlSelectPopUpHandler);
+				popup.addEventListener(Event.CANCEL, this.urlCancelPopUpHandler);
+			}
+			public function addNewURLTab(string:String):void{
+				if(string.indexOf("://")<0) string = "http://"+string;
+				var info:URLInfo = DBStructure.createURL(this._connection, string);
+				this.addURLToVerification(info);
+				this._urls.addItemAt(info, 0);
+				this.addTab(info);
+			}
+			public function addTab(url:URLInfo):void{
+				var tab:URLTrackerTab;
+				for(var index:int=0; index<this.logsNavigator.numElements; index++){
+					tab = this.logsNavigator.getElementAt(index) as URLTrackerTab;
+					if(tab && tab.info===url){
+						this.logsNavigator.selectedChild = tab;
+						return;
+					}
+				}
+				tab = new URLTrackerTab();
+				this.logsNavigator.addElement(tab);
+				tab.start(this._connection, url,  Math.max(1, int(this.timeoutStepper.value)));
+				this.urlInput.textInput.text = "";
+				this.urlInput.selectedIndex = -1;
+			}
+			
+			protected function showButton_clickHandler(event:MouseEvent):void{
+				URLLogWindow.display(this._connection, this.showDropDown.selectedItem);
+			}
+			
+			protected function closeHandler(event:Event):void{
+				Settings.write();
+				this.nativeApplication.exit();
+			}
+			private function urlTextInputChangeHandler(event:Event):void{
+				this.startButton.enabled = this.urlInput.selectedItem && this.urlInput.textInput.text;
+			}
+		]]>
+	</fx:Script>
+	<fx:Declarations>
+		<!-- Place non-visual elements (e.g., services, value objects) here -->
+	</fx:Declarations>
+	<s:layout>
+		<s:VerticalLayout paddingLeft="5" paddingTop="5" paddingRight="5" paddingBottom="5"/>
+	</s:layout>
+	<s:HGroup width="100%" gap="5" verticalAlign="middle">
+		<s:Label text="URL:"/>
+		<s:ComboBox id="urlInput" dataProvider="{urls}" prompt="Enter URL here..."  width="100%"/>
+		<s:Button id="startButton" label="Start" minWidth="120" click="startButton_clickHandler(event)" enabled="{urlInput.selectedItem}"/>
+	</s:HGroup>
+	<s:Label text="Example: http://google.com" paddingLeft="35" color="#888888"/>
+	<s:HGroup width="100%" paddingLeft="35" gap="5" verticalAlign="middle">
+		<s:Label text="Check every" />
+		<s:NumericStepper id="timeoutStepper" minimum="1" maximum="60" stepSize="1" value="@{settings.timeout}" width="55" textAlign="right"/>
+		<s:Label text="{timeoutStepper.value==1 ? 'minute' : 'minutes'}"/>
+	</s:HGroup>
+	<s:CheckBox id="restoreWindowCheckbox" selected="@{settings.restoreWindowOnStateChange}" label="Open/restore window when state changes" visible="{Capabilities.os.toLowerCase().indexOf('windows')==0}"/>
+	<mx:TabNavigator id="logsNavigator" width="100%" height="100%"/>
+	<s:HGroup width="100%">
+		<s:DropDownList id="showDropDown" dataProvider="{urls}" prompt="Select URL for log review" width="100%"/>
+		<s:Button label="Show" click="showButton_clickHandler(event)" enabled="{showDropDown.selectedItem}"/>
+	</s:HGroup>
+</s:WindowedApplication>

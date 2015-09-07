@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:ItemRenderer xmlns:fx="http://ns.adobe.com/mxml/2009" 
+				xmlns:s="library://ns.adobe.com/flex/spark" 
+				xmlns:mx="library://ns.adobe.com/flex/mx" 
+				autoDrawBackground="false" width="100%" 
+				dataChange="dataChangeHandler(event)">
+	<fx:Script>
+		<![CDATA[
+			import mx.binding.utils.BindingUtils;
+			import mx.events.FlexEvent;
+			import mx.formatters.DateFormatter;
+			
+			import flashx.textLayout.conversion.TextConverter;
+			import flashx.textLayout.elements.TextFlow;
+			[Embed(source="icons/question.gif")]
+			static public const ICON_UNKNOWN:Class;
+			[Embed(source="icons/network_offline.png")]
+			static public const ICON_OFFLINE:Class;
+			[Embed(source="icons/url_unreachable.png")]
+			static public const ICON_UNAVAILABLE:Class;
+			[Embed(source="icons/url_reachable.png")]
+			static public const ICON_AVAILABLE:Class;
+			
+			[Bindable]
+			public var item:WebPageState;
+			[Bindable]
+			public var  labelFlow:TextFlow;
+			[Bindable]
+			public var  timingsFlow:TextFlow;
+			
+			protected function dataChangeHandler(event:FlexEvent):void{
+				this.item = this.data as WebPageState;
+				if(!this.item) return;
+				BindingUtils.bindSetter(this.dataUpdated, this, ["item", "minTime"]);
+				BindingUtils.bindSetter(this.dataUpdated, this, ["item", "averageTime"]);
+				BindingUtils.bindSetter(this.dataUpdated, this, ["item", "maxTime"]);
+				BindingUtils.bindSetter(this.dataUpdated, this, ["item", "endDate"]);
+				var icon:Class;
+				switch(this.item.value){
+					case WebPageState.UNKNOWN:
+						icon = ICON_UNKNOWN;
+						this.label = "<font color=\"#FFFF00\">Timeout expired without response from server</font>";
+						break;
+					case WebPageState.NETWORK_OFFLINE:
+						icon = ICON_OFFLINE;
+						this.label = "<font color=\"#999999\">No network connection or server is offline</font>";
+						break;
+					case WebPageState.WEBPAGE_UNREACHABLE:
+						icon = ICON_UNAVAILABLE;
+						this.label = "<font color=\"#FF0000\">Resource is unavailable</font>";
+						break;
+					case WebPageState.WEBPAGE_REACHABLE:
+						icon = ICON_AVAILABLE;
+						this.label = "<font color=\"#FFFFFF\">Resource is available</font>";
+						break;
+				}
+				this.iconDisplay.source = icon;
+				this.labelUpdated();
+			}
+			private function dataUpdated(value:*):void{
+				this.addEventListener(Event.ENTER_FRAME, this.dataUpdated_enterFrameHandler);
+			}
+			private function dataUpdated_enterFrameHandler(event:Event):void{
+				this.removeEventListener(Event.ENTER_FRAME, this.dataUpdated_enterFrameHandler);
+				this.labelUpdated();
+			}
+			public function labelUpdated():void{
+				if(!this.item){
+					this.labelFlow = null;
+					return;
+				}
+				var label:String = this.label+"<br/>" +
+					"<b>From:</b> "+DateUtil.format(this.item.startDate, true)+"<br/>" +
+					"<b>To:</b> "+DateUtil.format(this.item.endDate, true)
+				this.labelFlow = TextConverter.importToFlow(label, TextConverter.TEXT_FIELD_HTML_FORMAT);
+				this.timingsFlow = TextConverter.importToFlow("\tMin:\t<b>"+this.item.minTime+"</b>ms<br/>\tAvg:\t<b>"+this.item.averageTime+"</b>ms<br/>\tMax:\t<b>"+this.item.maxTime+"</b>ms", TextConverter.TEXT_FIELD_HTML_FORMAT);
+			}
+			
+		]]>
+	</fx:Script>
+	<s:HGroup  width="100%" paddingLeft="5" paddingTop="5" paddingRight="5" paddingBottom="5" gap="5" verticalAlign="middle">
+		<s:BitmapImage id="iconDisplay" width="32" height="32" smooth="true"/>
+		<s:RichText textFlow="{labelFlow}" width="100%"/>
+		<s:RichText textFlow="{timingsFlow}" visible="{item.value==WebPageState.WEBPAGE_REACHABLE}"/>
+	</s:HGroup>
+</s:ItemRenderer>
