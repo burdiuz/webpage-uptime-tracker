@@ -12,9 +12,9 @@ And you can check detailed log for every URL you have tracked.
 [Download Adobe AIR runtime](https://get.adobe.com/air/)
 
 ####Resources used in this application
-[Adobe Flex SDK 4](http://www.adobe.com/devnet/flex/flex-sdk-download.html)
-[Kingnare style](http://code.google.com/p/kingnarestyle/) -- application skin
-Icons from:
+[Adobe Flex SDK 4](http://www.adobe.com/devnet/flex/flex-sdk-download.html)  
+[Kingnare style](http://code.google.com/p/kingnarestyle/) -- application skin  
+Icons from:  
 http://www.iconfinder.com/  
 http://neurovit.deviantart.com  
 http://www.aha-soft.com  
